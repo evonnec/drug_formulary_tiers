@@ -1,16 +1,14 @@
-version: '3'
-
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:18
     shm_size: 1gb
-    expose:
-      - "5432"
     healthcheck:
-      test: [ "CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres" ]
+      # Checked over TCP: while the init scripts load the data, Postgres only
+      # listens on its socket, so this passes once the data is ready.
+      test: [ "CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-d", "formulary", "-U", "appuser" ]
       timeout: 45s
-      interval: 10s
-      retries: 10
+      interval: 5s
+      retries: 30
     restart: always
     environment:
       - POSTGRES_USER=postgres
@@ -19,7 +17,7 @@ services:
       - APP_DB_PASS=appuser
       - APP_DB_NAME=formulary
     volumes:
-      - ./db:/docker-entrypoint-initdb.d/
-      - ./data:/data
+      - ./db:/docker-entrypoint-initdb.d/:ro
+      - ./data:/data:ro
     ports:
-      - 5432:5432
+      - "5432:5432"

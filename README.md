@@ -130,26 +130,122 @@ The target formulary for this part of the exercise is now `formulary_id = '00022
 * (A) Reuse your previously implemented logic to produce the same calculations for the average tier differences as described in parts (A) and (B) from Part 1 on the `formulary` table.
 * (B) Reuse your previously implemented logic to produce the same calculations for the average tier differences as described in parts (A) and (B) from Part 2 on the `formulary` table.
 
-## Running the solution
+## Solution
 
-The solution targets Python 3.15 and is managed with [uv](https://docs.astral.sh/uv/):
+The solution targets Python 3.15 and is managed with [uv](https://docs.astral.sh/uv/).
+
 ```bash
-# Install Python 3.15 and the locked dependencies into .venv
-uv sync
+docker compose up --detach --wait   # Postgres with both tables loaded
+uv sync                             # Python 3.15 and the locked dependencies
 
-# Part 1: compare formularies in `test_formulary`
-uv run python src/solution.py
-
-# Part 3: compare against a target formulary in `formulary`
-uv run python src/solution.py 00022170
+uv run formulary-tiers 1            # Part 1: pandas on test_formulary
+uv run formulary-tiers 2            # Part 2: SQL on test_formulary
+uv run formulary-tiers 3            # Part 3: both on formulary, with timings
+uv run formulary-tiers 3 --target 00022000   # any other target formulary
 ```
 
-### Checks
+`db/01-init.sh` only runs when the container is first created, so after changing it
+run `docker compose down` before `docker compose up` again.
 
-CI runs these on every pull request and push to `main`:
+### Layout
+
+| Module | Responsibility |
+| --- | --- |
+| `src/drug_formulary_tiers/pandas_solution.py` | Part 1: Table-2 and Table-3 as pure functions of a DataFrame |
+| `src/drug_formulary_tiers/sql_solution.py` | Part 2: the same tables computed in SQL and run through SQLAlchemy |
+| `src/drug_formulary_tiers/db.py` | Connection settings (`DATABASE_URL` overrides them) and the Table-1 extract |
+| `src/drug_formulary_tiers/schema.py` | Table and column names, the uncovered tier (7), input validation |
+| `src/drug_formulary_tiers/cli.py` | `formulary-tiers {1,2,3}`: runs a part and prints each table with timings |
+
+### Approach
+
+Each formulary is compared with the target on the union of their drugs. Both
+solutions build Table-2 the same way:
+
+1. Pair every formulary other than the target with every target drug (a cross join),
+   so the drugs a formulary lacks get a row.
+2. Full outer join that with the formularies' own drugs on `(formulary_id, rxcui)`,
+   which adds the drugs the target lacks.
+3. Give whichever side is missing tier 7.
+
+Table-3 averages `tier_level_value_target - tier_level_value` per formulary. For (B),
+equal tiers become null (`NULLIF` in SQL, `where` in pandas) so the average skips them.
+A formulary whose drugs all match the target keeps its row in (B) with a null average,
+so (A) and (B) always list the same formularies.
+
+The work is linear in the size of Table-2 (1,659,527 rows for Part 3). The previous
+solution self-joined the whole table on `rxcui` alone, building a 514M-row
+intermediate that took about 7 minutes.
+
+### Results
+
+For the README example, target `00019356`:
+
+| formulary_id | (A) all drugs | (B) drugs on different tiers |
+| --- | --- | --- |
+| 00019100 | 0.0 | 0.0 |
+| 00019200 | 0.0 | 0.0 |
+| 00019300 | -1.0 | -1.5 |
+| 00019400 | 0.0 | 0.0 |
+
+Part 3, target `00022170`, compares 457 formularies. Timings from one run on an Apple
+silicon laptop against Postgres:
+
+| Step | pandas | SQL |
+| --- | --- | --- |
+| Load Table-1 (1,583,463 rows) | 1.0s | — |
+| Table-2 (1,659,527 rows) | 1.0s | 3.7s, mostly transferring the rows |
+| Table-3 (A) and (B) | 0.1s | 1.9s, two queries of about 0.9s each |
+
+### Edge cases and data quality
+
+- **Target not in the table:** both solutions raise `TargetNotFoundError`, and the CLI
+  exits with status 1.
+- **Formulary sharing no drugs with the target** (`00019400`): compared on both drug
+  sets, every drug uncovered on one side.
+- **Target as the only formulary:** empty Table-2 and Table-3.
+- **Duplicate `(formulary_id, rxcui)` keys or null values:** the pandas solution raises
+  `FormularyDataError`; the database rejects them with a primary key and `NOT NULL`.
+- **Tiers outside 1-6:** the full dataset has 102 rows on tier 7 (formularies
+  `00022158` and `00022161`). A covered drug on tier 7 cannot be told apart from an
+  uncovered one, so these rows are kept and a warning is logged.
+- **Identifiers:** `formulary_id` and `rxcui` stay text so leading zeros survive. Table
+  names are checked against an allowlist before going into SQL, and the target is
+  always a bind parameter.
+
+### Database
+
+`db/01-init.sh` and `docker-compose.yml`:
+
+- Primary key on `(formulary_id, rxcui)` and `NOT NULL` on the columns the comparison
+  uses, added after the bulk load, followed by `VACUUM ANALYZE`.
+- `formulary_id` and `rxcui` use the byte-order `"C"` collation, since they are codes
+  rather than prose. Sorting Table-2 dropped from 8.4s to 2.9s, and the order matches
+  pandas.
+- `appuser` owns the `formulary` database instead of being a superuser.
+- The image is pinned to `postgres:18`. The healthcheck connects over TCP, so
+  `docker compose up --wait` returns only after the data has loaded.
+
+### Tests
+
 ```bash
 uv run pytest                  # test
 uv run ruff check              # lint
 uv run mypy                    # type check
 uv run ruff format --check     # format
 ```
+
+- The README's Table-1, Table-2 and Table-3 are fixtures that both solutions must
+  reproduce exactly.
+- Property-based tests (Hypothesis) compare both solutions on random formularies with
+  a brute-force reading of the rules in `tests/oracle.py`, which shares no code with
+  the package.
+- The SQL tests run on SQLite, and also on Postgres when `TEST_DATABASE_URL` is set.
+  With it set, `tests/test_postgres.py` also checks the data `db/01-init.sh` loads and
+  that both solutions agree with the reference on the full `formulary` table:
+  ```bash
+  TEST_DATABASE_URL=postgresql+psycopg://appuser:appuser@localhost:5432/formulary uv run pytest
+  ```
+
+CI runs all four checks on every pull request and push to `main`. The test job starts
+the database with `docker compose`, so the Postgres tests always run there.
