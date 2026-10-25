@@ -173,14 +173,24 @@ build Table-2 the same way:
    which adds the drugs the target lacks.
 3. Give whichever side is missing tier 7.
 
-Table-3 averages `tier_level_value_target - tier_level_value` per formulary. For (B),
-equal tiers become null (`NULLIF` in SQL, `when/then` in polars) so the average skips
-them. A formulary whose drugs all match the target keeps its row in (B) with a null
-average, so (A) and (B) always list the same formularies.
+Table-3 averages `tier_level_value_target - tier_level_value` per formulary. A
+formulary whose drugs all match the target keeps its row in (B) with a null average, so
+(A) and (B) always list the same formularies.
 
-The polars solution is linear in the size of Table-2 (1,659,527 rows for Part 3). The
-original solution self-joined the whole table on `rxcui` alone, building a 514M-row
-intermediate that took about 7 minutes.
+- **polars** averages Table-2 directly. For (B), equal tiers become null
+  (`when/then`), so the average skips them.
+- **SQL** computes (A) and (B) in one pass without building Table-2. Over the union of a
+  formulary's drugs and the target's, the differences always sum to
+  `Σ(target tier - 7) + Σ(7 - formulary tier)`, whatever drugs the two share. Only the
+  counts need the drugs they share, so each row is joined to the target's few thousand
+  drugs instead of building the 1.7M-row full join.
+
+Both are linear in the size of the data. The original solution self-joined the whole
+table on `rxcui` alone, building a 514M-row intermediate that took about 7 minutes.
+
+On Postgres, both solutions read their rows over `COPY ... TO STDOUT` as CSV, which
+polars parses directly. That uses about a fifth of the memory of building a Python
+object per value. Other databases, such as SQLite in the tests, fetch rows the usual way.
 
 ### Results
 
@@ -195,14 +205,16 @@ For the README example, target `00019356`:
 
 Part 3, target `00022170`, compares 457 formularies. Three of them (`00022153`,
 `00022258`, `00022360`) match the target exactly, so their (B) average is null. Timings
-from one run on an Apple silicon laptop against a local Postgres:
+are medians of three runs on an Apple silicon laptop against a local Postgres:
 
 | Step | polars | SQL |
 | --- | --- | --- |
-| Check the table | included in Table-2 | 0.3s |
-| Load Table-1 (1,583,463 rows) | 0.9s | — |
-| Table-2 (1,659,527 rows) | 0.2s | 3.9s: about 1s joining, 1.7s sorting, 1s fetching |
-| Table-3 (A) and (B) | 0.04s | 2.0s: two queries of about 1s each |
+| Check the table | included in Table-2 | 0.06s |
+| Load Table-1 (1,583,463 rows) | 1.0s | — |
+| Table-2 (1,659,527 rows) | 0.3s | 1.9s, mostly the full join and transfer |
+| Table-3 (A) and (B) | 0.04s | 0.2s, one query |
+
+Peak memory for the whole `formulary-tiers 3` run is about 0.9 GB.
 
 ### Edge cases and data quality
 
@@ -222,9 +234,9 @@ Both solutions run the same checks before comparing:
 - **Target as the only formulary:** empty Table-2 and Table-3 with the usual columns.
 - **SQL safety:** table names are checked against an allowlist before going into SQL,
   and the target is always a bind parameter.
-- **Row order:** Table-2 is sorted by `(formulary_id, rxcui)` in byte order. The SQL
-  solution gets that order from the `"C"` collation `db/01-init.sh` sets, so on a
-  database with another collation its rows can come back in a different order.
+- **Row order:** both solutions sort Table-2 by `(formulary_id, rxcui)` in byte order
+  with polars, whatever the database's collation. Sorting 1.7M rows took Postgres longer
+  than joining them.
 
 ### Database
 
@@ -233,7 +245,10 @@ Both solutions run the same checks before comparing:
 - One transaction loads both tables and adds a primary key on `(formulary_id, rxcui)`
   and `NOT NULL` on the columns the comparison uses. It is followed by `VACUUM ANALYZE`.
 - `formulary_id` and `rxcui` use the byte-order `"C"` collation, since they are codes
-  rather than prose. Sorting Table-2 dropped from 8.4s to 2.9s.
+  rather than prose. Comparing them, and building and scanning the primary key, is
+  cheaper than under `en_US`.
+- When the table has a unique index on its key, as the primary key here is, the SQL
+  check trusts it instead of counting duplicates. That is most of the check's cost.
 - `appuser` owns the `formulary` database instead of being a superuser.
 - The image is pinned to `postgres:18`, and the port is only published on localhost.
 - The healthcheck queries the loaded data over TCP. `docker compose up --wait` returns

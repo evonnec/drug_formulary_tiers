@@ -7,7 +7,7 @@ from polars.testing import assert_frame_equal
 
 from drug_formulary_tiers.db import Settings, create_engine, load_formulary
 from drug_formulary_tiers.schema import require_table
-from tests.helpers import ConnectionFactory
+from tests.helpers import ConnectionFactory, formulary_frame
 
 DATA = Path(__file__).parents[1] / "data"
 
@@ -37,6 +37,24 @@ def test_load_formulary_returns_table_1(
         loaded = load_formulary(connection, "test_formulary")
 
     assert_frame_equal(loaded, readme_formulary)
+
+
+def test_load_formulary_keeps_values_csv_could_mangle(
+    connect: ConnectionFactory,
+) -> None:
+    formulary = formulary_frame(
+        [
+            ("00019356", 1, "1001"),
+            ('a"b', 2, "c,d"),
+            ("line\nbreak", 3, ""),
+            ("NULL", 4, "\\N"),
+            ("Ä", 7, " x "),
+        ]
+    )
+    with connect(formulary) as connection:
+        loaded = load_formulary(connection, "test_formulary")
+
+    assert_frame_equal(loaded, formulary, check_row_order=False)
 
 
 def test_load_formulary_rejects_unknown_tables() -> None:

@@ -14,7 +14,7 @@ from polars.testing import assert_frame_equal
 
 from drug_formulary_tiers import polars_solution
 from drug_formulary_tiers.db import load_formulary
-from drug_formulary_tiers.sql_solution import SqlComparison
+from drug_formulary_tiers.sql_solution import SqlComparison, _has_unique_key
 from tests.helpers import TEST_DATABASE_URL, requires_postgres
 from tests.oracle import expected_tier_differences
 
@@ -83,6 +83,13 @@ def test_key_is_enforced(connection: sa.Connection, table: str) -> None:
             existing._asdict(),
         )
     connection.rollback()
+
+
+def test_primary_key_lets_the_check_skip_counting_duplicates(
+    connection: sa.Connection,
+) -> None:
+    assert _has_unique_key(connection, "formulary")
+    assert _has_unique_key(connection, "test_formulary")
 
 
 def test_key_columns_use_c_collation(connection: sa.Connection) -> None:

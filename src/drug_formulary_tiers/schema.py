@@ -90,11 +90,18 @@ def validate_formulary(formulary: pl.DataFrame) -> None:
 
     tier = pl.col("tier_level_value")
     covered = tier.is_between(COVERED_TIERS.start, COVERED_TIERS.stop - 1)
-    nulls, outside_tiers = formulary.select(
-        pl.sum_horizontal(pl.col(*TABLE_1_SCHEMA).null_count()), (~covered).sum()
+    nulls, outside_tiers, keys = formulary.select(
+        nulls=pl.sum_horizontal(pl.col(*TABLE_1_SCHEMA).null_count()),
+        outside_tiers=(~covered).sum(),
+        keys=pl.struct(KEY).n_unique(),
     ).row(0)
+    # Counting distinct keys is several times cheaper than grouping by them, so
+    # the keys that repeat are only counted when there are some.
+    duplicate_keys = (
+        formulary.group_by(KEY).len().filter(pl.col("len") > 1).height
+        if keys < formulary.height
+        else 0
+    )
     check_counts(
-        duplicate_keys=formulary.group_by(KEY).len().filter(pl.col("len") > 1).height,
-        nulls=nulls,
-        outside_tiers=outside_tiers,
+        duplicate_keys=duplicate_keys, nulls=nulls, outside_tiers=outside_tiers
     )
