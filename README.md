@@ -1,4 +1,8 @@
-# Data Code Challenge
+# Drug Formulary Tiers
+
+Compares Medicare drug formularies by how far their drug tiers sit from a target
+formulary's, two ways: with polars, and with SQL on Postgres. The challenge it answers
+comes first; the implementation is under [Solution](#solution).
 
 ## Background
 
