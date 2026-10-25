@@ -15,9 +15,20 @@ from tests.helpers import ConnectionFactory, formulary_frame
 from tests.oracle import expected_tier_differences
 
 # Mixed case, punctuation and non-ASCII ids check that both solutions sort the
-# same way; tier 7 also appears in the real data.
-FORMULARY_IDS = [*(f"{n:08d}" for n in range(1, 9)), "B", "_x", "a", "Ä"]
-RXCUIS = [*(str(n) for n in range(1000, 1012)), "999", "Rx", "é"]
+# same way, and quotes, commas, newlines and NULL-like text check the CSV that
+# Postgres sends Table-2 over. Tier 7 also appears in the real data.
+FORMULARY_IDS = [*(f"{n:08d}" for n in range(1, 9)), "B", "_x", "a", "Ä", 'a"b', "NULL"]
+RXCUIS = [
+    *(str(n) for n in range(1000, 1012)),
+    "999",
+    "Rx",
+    "é",
+    "c,d",
+    "a\nb",
+    "\\N",
+    " x ",
+    "",
+]
 
 
 @st.composite

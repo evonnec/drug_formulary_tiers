@@ -1,9 +1,13 @@
 """Database connection settings and the Table-1 extract."""
 
+import io
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any, cast
 
 lazy import polars as pl
+lazy import psycopg
 lazy import sqlalchemy as sa
 
 from drug_formulary_tiers.schema import TABLE_1_SCHEMA, polars_schema, require_table
@@ -36,11 +40,52 @@ def create_engine(url: str | sa.URL | None = None) -> sa.Engine:
     return sa.create_engine(url or os.environ.get("DATABASE_URL") or Settings().url)
 
 
+def read_frame(
+    connection: sa.Connection,
+    query: sa.TextClause | sa.Selectable,
+    schema: Mapping[str, type],
+    parameters: Mapping[str, Any] | None = None,
+) -> pl.DataFrame:
+    """The rows of `query`, whose columns are those of `schema`, as a DataFrame.
+
+    On psycopg the rows come over COPY as CSV, which polars parses without
+    building a Python object per value: several times less memory than
+    fetching rows, and faster. Other drivers, such as SQLite's, fetch rows.
+    """
+    if connection.dialect.driver != "psycopg":
+        return pl.read_database(
+            query,
+            connection,
+            execute_options={"parameters": parameters} if parameters else None,
+            schema_overrides=polars_schema(schema),
+        )
+    compiled = query.compile(dialect=connection.dialect)
+    statement = f"COPY ({compiled}) TO STDOUT (FORMAT csv, HEADER, ENCODING 'UTF8')"
+    params = compiled.construct_params(parameters) or None
+    data = bytearray()
+    try:
+        driver = cast(
+            "psycopg.Connection[Any]", connection.connection.driver_connection
+        )
+        with driver.cursor() as cursor:
+            with cursor.copy(statement, params) as copy:
+                # libpq hands over one row per block
+                for block in copy:
+                    data += block
+    except psycopg.Error as error:
+        # The failed COPY aborted the transaction behind SQLAlchemy's back.
+        connection.rollback()
+        raise sa.exc.DBAPIError.instance(
+            statement, params, error, psycopg.Error
+        ) from error
+    return pl.read_csv(io.BytesIO(data), schema_overrides=polars_schema(schema)).select(
+        *schema
+    )
+
+
 def load_formulary(connection: sa.Connection, table: str) -> pl.DataFrame:
     """Table-1: the formulary_id, tier_level_value and rxcui of every row in `table`."""
     query = sa.select(
         sa.table(require_table(table), *(sa.column(c) for c in TABLE_1_SCHEMA))
     )
-    return pl.read_database(
-        query, connection, schema_overrides=polars_schema(TABLE_1_SCHEMA)
-    )
+    return read_frame(connection, query, TABLE_1_SCHEMA)

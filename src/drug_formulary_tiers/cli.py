@@ -88,8 +88,7 @@ def run_sql(connection: sa.Connection, table: str, target_id: str) -> None:
     print(f"Table-2:\n{comparison}\n")
 
     with timings.step("Table-3"):
-        all_tiers = query.average_tier_difference()
-        changed_tiers = query.average_tier_difference(exclude_equal=True)
+        all_tiers, changed_tiers = query.average_tier_differences()
     print_table_3(all_tiers, changed_tiers)
     print(timings)
 

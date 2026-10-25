@@ -3,8 +3,10 @@
 lazy import polars as pl
 lazy import sqlalchemy as sa
 
+from drug_formulary_tiers.db import read_frame
 from drug_formulary_tiers.schema import (
     COVERED_TIERS,
+    KEY,
     TABLE_2_SCHEMA,
     TABLE_3_SCHEMA,
     UNCOVERED_TIER,
@@ -49,23 +51,57 @@ comparison AS (
 )
 """
 
+# Sorted by polars once fetched rather than by ORDER BY: Postgres spends longer
+# sorting the 1.7M rows than joining them, and polars sorts in byte order
+# whatever the columns' collation.
 _TABLE_2_SQL = """
 SELECT * FROM comparison
-ORDER BY formulary_id, rxcui
 """
 
-# NULLIF turns equal tiers into NULLs, which AVG skips, for part B. A formulary
-# whose drugs all match the target keeps its row with a NULL average.
+# Table-3 (A) and (B) in one pass, without building Table-2. On the union of a
+# formulary's drugs and the target's, with 7 for a missing drug, the differences
+# sum to sum(target tier - 7) + sum(7 - formulary tier) whatever drugs they
+# share, so only the counts need the target's tiers. Joining each drug to the
+# target's few thousand keeps the hash table small, where Table-2's full join
+# spills to disk. A formulary whose drugs all match the target has no changed
+# drugs, so NULLIF leaves it a NULL (B) average.
 _TABLE_3_SQL = """
+WITH target_totals AS (
+    SELECT
+        count(*) AS drugs,
+        COALESCE(SUM(tier_level_value - {uncovered}), 0) AS difference,
+        count(CASE WHEN tier_level_value <> {uncovered} THEN 1 END) AS changed
+    FROM {table}
+    WHERE formulary_id = :target_id
+),
+per_formulary AS (
+    SELECT
+        o.formulary_id,
+        count(*) AS drugs,
+        SUM({uncovered} - o.tier_level_value) AS difference,
+        count(CASE WHEN COALESCE(t.tier_level_value, {uncovered}) <> o.tier_level_value
+            THEN 1 END) AS changed,
+        count(t.rxcui) AS shared_drugs,
+        count(CASE WHEN t.tier_level_value <> {uncovered} THEN 1 END) AS shared_changed
+    FROM {table} AS o
+    LEFT JOIN {table} AS t
+        ON t.formulary_id = :target_id AND t.rxcui = o.rxcui
+    WHERE o.formulary_id <> :target_id
+    GROUP BY o.formulary_id
+)
 SELECT
-    formulary_id,
-    CAST(AVG({difference}) AS DOUBLE PRECISION) AS tier_difference
-FROM comparison
-GROUP BY formulary_id
-ORDER BY formulary_id
+    p.formulary_id,
+    CAST(p.difference + tt.difference AS DOUBLE PRECISION)
+        / (p.drugs + tt.drugs - p.shared_drugs) AS all_tiers,
+    CAST(p.difference + tt.difference AS DOUBLE PRECISION)
+        / NULLIF(p.changed + tt.changed - p.shared_changed, 0) AS changed_tiers
+FROM per_formulary AS p
+CROSS JOIN target_totals AS tt
+ORDER BY p.formulary_id
 """
-
-_DIFFERENCE = "tier_level_value_target - tier_level_value"
+_AVERAGES_SCHEMA = frozendict(
+    {"formulary_id": str, "all_tiers": float, "changed_tiers": float}
+)
 
 
 def _comparison_query(table: str, select: str) -> sa.TextClause:
@@ -78,9 +114,7 @@ def _comparison_query(table: str, select: str) -> sa.TextClause:
 # (or tables built some other way) may not.
 _CHECK_SQL = """
 SELECT
-    (SELECT count(*) FROM (
-        SELECT 1 FROM {table} GROUP BY formulary_id, rxcui HAVING count(*) > 1
-    ) AS duplicates) AS duplicate_keys,
+    {duplicate_keys} AS duplicate_keys,
     3 * count(*) - count(formulary_id) - count(tier_level_value) - count(rxcui)
         AS nulls,
     count(CASE WHEN tier_level_value NOT BETWEEN {low} AND {high} THEN 1 END)
@@ -88,6 +122,35 @@ SELECT
     count(CASE WHEN formulary_id = :target_id THEN 1 END) AS target_rows
 FROM {table}
 """
+_DUPLICATE_KEYS_SQL = """(SELECT count(*) FROM (
+        SELECT 1 FROM {table} GROUP BY formulary_id, rxcui HAVING count(*) > 1
+    ) AS duplicates)"""
+
+# Counting duplicate keys is most of the check, and Postgres already rules them
+# out with a unique index on (formulary_id, rxcui) or part of it, such as the
+# primary key. Nulls are still counted, since a unique index allows them.
+# to_regclass resolves the table name as the queries do, so a temporary table
+# that shadows a keyed one is checked in full.
+_UNIQUE_KEY_SQL = """
+SELECT EXISTS (
+    SELECT FROM pg_index
+    WHERE indrelid = to_regclass(:table)
+        AND indisunique AND indisvalid AND indimmediate AND indpred IS NULL
+        AND indkey::int2[] <@ ARRAY(
+            SELECT attnum FROM pg_attribute
+            WHERE attrelid = to_regclass(:table)
+                AND attname IN ('formulary_id', 'rxcui')
+        )
+)
+"""
+
+
+def _has_unique_key(connection: sa.Connection, table: str) -> bool:
+    if connection.dialect.name != "postgresql":
+        return False
+    return bool(
+        connection.execute(sa.text(_UNIQUE_KEY_SQL), {"table": table}).scalar_one()
+    )
 
 
 class SqlComparison:
@@ -102,8 +165,15 @@ class SqlComparison:
         self.table = require_table(table)
         self.target_id = target_id
 
+        if _has_unique_key(connection, self.table):
+            duplicate_keys = "0"
+        else:
+            duplicate_keys = _DUPLICATE_KEYS_SQL.format(table=self.table)
         check = _CHECK_SQL.format(
-            table=self.table, low=COVERED_TIERS.start, high=COVERED_TIERS.stop - 1
+            table=self.table,
+            duplicate_keys=duplicate_keys,
+            low=COVERED_TIERS.start,
+            high=COVERED_TIERS.stop - 1,
         )
         counts = connection.execute(sa.text(check), self._parameters).one()
         check_counts(
@@ -120,19 +190,30 @@ class SqlComparison:
 
     def comparison_table(self) -> pl.DataFrame:
         """Table-2."""
-        return pl.read_database(
+        return read_frame(
+            self.connection,
             _comparison_query(self.table, _TABLE_2_SQL),
+            TABLE_2_SCHEMA,
+            self._parameters,
+        ).sort(KEY)
+
+    def average_tier_differences(self) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Table-3 for parts A and B, from a single query."""
+        averages = pl.read_database(
+            sa.text(_TABLE_3_SQL.format(table=self.table, uncovered=UNCOVERED_TIER)),
             self.connection,
             execute_options={"parameters": self._parameters},
-            schema_overrides=polars_schema(TABLE_2_SCHEMA),
+            schema_overrides=polars_schema(_AVERAGES_SCHEMA),
         )
+        all_tiers, changed_tiers = (
+            averages.select("formulary_id", tier_difference=column).cast(
+                polars_schema(TABLE_3_SCHEMA)
+            )
+            for column in ("all_tiers", "changed_tiers")
+        )
+        return all_tiers, changed_tiers
 
     def average_tier_difference(self, *, exclude_equal: bool = False) -> pl.DataFrame:
         """Table-3, for part B with `exclude_equal`."""
-        difference = f"NULLIF({_DIFFERENCE}, 0)" if exclude_equal else _DIFFERENCE
-        return pl.read_database(
-            _comparison_query(self.table, _TABLE_3_SQL.format(difference=difference)),
-            self.connection,
-            execute_options={"parameters": self._parameters},
-            schema_overrides=polars_schema(TABLE_3_SCHEMA),
-        )
+        all_tiers, changed_tiers = self.average_tier_differences()
+        return changed_tiers if exclude_equal else all_tiers
