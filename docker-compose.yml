@@ -3,12 +3,14 @@ services:
     image: postgres:18
     shm_size: 1gb
     healthcheck:
-      # Checked over TCP: while the init scripts load the data, Postgres only
-      # listens on its socket, so this passes once the data is ready.
-      test: [ "CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-d", "formulary", "-U", "appuser" ]
-      timeout: 45s
+      # Checked over TCP, which Postgres only opens once the init scripts have
+      # run, and by querying the data, which db/01-init.sh loads in a single
+      # transaction: a restart after a failed load stays unhealthy.
+      test: [ "CMD-SHELL", "PGPASSWORD=$$APP_DB_PASS psql -h 127.0.0.1 -U $$APP_DB_USER -d $$APP_DB_NAME -tAc 'SELECT 1 FROM formulary LIMIT 1' | grep -q 1" ]
+      start_period: 120s
       interval: 5s
-      retries: 30
+      timeout: 10s
+      retries: 5
     restart: always
     environment:
       - POSTGRES_USER=postgres
@@ -20,4 +22,5 @@ services:
       - ./db:/docker-entrypoint-initdb.d/:ro
       - ./data:/data:ro
     ports:
-      - "5432:5432"
+      # Only reachable from this machine, since the passwords are defaults.
+      - "127.0.0.1:5432:5432"

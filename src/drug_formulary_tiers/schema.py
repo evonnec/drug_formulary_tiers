@@ -1,9 +1,10 @@
-"""Table and column names, and the input checks both solutions rely on."""
+"""Table schemas, and the input checks both solutions rely on."""
 
 import logging
+from collections.abc import Mapping
 from typing import Literal, cast, get_args
 
-lazy import pandas as pd
+lazy import polars as pl
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +15,26 @@ FORMULARY_TABLES: tuple[FormularyTable, ...] = get_args(FormularyTable.__value__
 UNCOVERED_TIER = 7
 COVERED_TIERS = range(1, 7)
 
+# Python types rather than polars dtypes, so importing this module doesn't
+# import polars; polars reads str, int and float as String, Int64 and Float64.
 KEY = ("formulary_id", "rxcui")
-TABLE_1_COLUMNS = ("formulary_id", "tier_level_value", "rxcui")
-TABLE_2_COLUMNS = (
-    "formulary_target_id",
-    "tier_level_value_target",
-    "rxcui",
-    "formulary_id",
-    "tier_level_value",
+TABLE_1_SCHEMA = frozendict(
+    {"formulary_id": str, "tier_level_value": int, "rxcui": str}
 )
-TABLE_3_COLUMNS = ("formulary_id", "tier_difference")
+TABLE_2_SCHEMA = frozendict(
+    {
+        "formulary_target_id": str,
+        "tier_level_value_target": int,
+        "rxcui": str,
+        "formulary_id": str,
+        "tier_level_value": int,
+    }
+)
+TABLE_3_SCHEMA = frozendict({"formulary_id": str, "tier_difference": float})
+
+
+def polars_schema(schema: Mapping[str, type]) -> pl.Schema:
+    return pl.Schema(schema)
 
 
 class FormularyDataError(ValueError):
@@ -45,31 +56,45 @@ def require_table(table: str) -> FormularyTable:
     return cast(FormularyTable, table)
 
 
-def validate_formulary(formulary: pd.DataFrame) -> None:
+def check_counts(*, duplicate_keys: int, nulls: int, outside_tiers: int) -> None:
+    """Raise or warn on the problem counts either solution found in its input."""
+    if nulls:
+        raise FormularyDataError(f"{nulls} null formulary_id, tier or rxcui values")
+    if duplicate_keys:
+        raise FormularyDataError(
+            f"{duplicate_keys} (formulary_id, rxcui) keys appear more than once"
+        )
+    # Tiers outside 1-6 (the full dataset has some 7s) are kept but flagged: a
+    # covered drug on tier 7 is indistinguishable from an uncovered one.
+    if outside_tiers:
+        logger.warning(
+            "%d rows have a tier_level_value outside %d-%d",
+            outside_tiers,
+            COVERED_TIERS.start,
+            COVERED_TIERS.stop - 1,
+        )
+
+
+def validate_formulary(formulary: pl.DataFrame) -> None:
     """Check Table-1 before comparing, since bad rows would skew the averages."""
-    missing = set(TABLE_1_COLUMNS) - set(formulary.columns)
+    missing = set(TABLE_1_SCHEMA) - set(formulary.columns)
     if missing:
         raise FormularyDataError(f"missing columns: {sorted(missing)}")
 
-    nulls = formulary[list(TABLE_1_COLUMNS)].isna().sum()
-    if nulls.any():
-        raise FormularyDataError(f"null values: {nulls[nulls > 0].to_dict()}")
+    for column, expected in TABLE_1_SCHEMA.items():
+        dtype = formulary.schema[column]
+        if not (dtype.is_integer() if expected is int else dtype == pl.String):
+            raise FormularyDataError(
+                f"{column} is {dtype}, expected {pl.Int64 if expected is int else pl.String}"
+            )
 
-    duplicated = formulary.duplicated(list(KEY), keep=False)
-    if duplicated.any():
-        example = formulary.loc[duplicated, list(KEY)].iloc[0].to_dict()
-        raise FormularyDataError(
-            f"{duplicated.sum()} rows share a (formulary_id, rxcui) key, e.g. {example}"
-        )
-
-    # Tiers outside 1-6 (the full dataset has some 7s) are kept but flagged: a
-    # covered drug on tier 7 is indistinguishable from an uncovered one.
-    outside = ~formulary["tier_level_value"].isin(COVERED_TIERS)
-    if outside.any():
-        logger.warning(
-            "%d rows have a tier_level_value outside %d-%d: %s",
-            outside.sum(),
-            COVERED_TIERS.start,
-            COVERED_TIERS.stop - 1,
-            sorted(formulary.loc[outside, "tier_level_value"].unique().tolist()),
-        )
+    tier = pl.col("tier_level_value")
+    covered = tier.is_between(COVERED_TIERS.start, COVERED_TIERS.stop - 1)
+    nulls, outside_tiers = formulary.select(
+        pl.sum_horizontal(pl.col(*TABLE_1_SCHEMA).null_count()), (~covered).sum()
+    ).row(0)
+    check_counts(
+        duplicate_keys=formulary.group_by(KEY).len().filter(pl.col("len") > 1).height,
+        nulls=nulls,
+        outside_tiers=outside_tiers,
+    )

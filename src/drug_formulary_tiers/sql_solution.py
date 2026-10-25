@@ -1,11 +1,16 @@
 """Part 2: the same comparison with every join and aggregate done in SQL."""
 
-lazy import pandas as pd
+lazy import polars as pl
 lazy import sqlalchemy as sa
 
 from drug_formulary_tiers.schema import (
+    COVERED_TIERS,
+    TABLE_2_SCHEMA,
+    TABLE_3_SCHEMA,
     UNCOVERED_TIER,
     TargetNotFoundError,
+    check_counts,
+    polars_schema,
     require_table,
 )
 
@@ -68,39 +73,66 @@ def _comparison_query(table: str, select: str) -> sa.TextClause:
     return sa.text(cte + select)
 
 
-def _require_target(connection: sa.Connection, table: str, target_id: str) -> None:
-    query = sa.text(
-        f"SELECT 1 FROM {require_table(table)} WHERE formulary_id = :target_id LIMIT 1"
-    )
-    if connection.execute(query, {"target_id": target_id}).first() is None:
-        raise TargetNotFoundError(target_id)
+# The same checks the polars solution makes on Table-1. The primary key in
+# db/01-init.sh already rules out nulls and duplicates there, but other databases
+# (or tables built some other way) may not.
+_CHECK_SQL = """
+SELECT
+    (SELECT count(*) FROM (
+        SELECT 1 FROM {table} GROUP BY formulary_id, rxcui HAVING count(*) > 1
+    ) AS duplicates) AS duplicate_keys,
+    3 * count(*) - count(formulary_id) - count(tier_level_value) - count(rxcui)
+        AS nulls,
+    count(CASE WHEN tier_level_value NOT BETWEEN {low} AND {high} THEN 1 END)
+        AS outside_tiers,
+    count(CASE WHEN formulary_id = :target_id THEN 1 END) AS target_rows
+FROM {table}
+"""
 
 
-def build_comparison_table(
-    connection: sa.Connection, table: str, target_id: str
-) -> pd.DataFrame:
-    """Table-2, computed in the database. See the pandas version for the rules."""
-    _require_target(connection, table, target_id)
-    return pd.read_sql_query(
-        _comparison_query(table, _TABLE_2_SQL),
-        connection,
-        params={"target_id": target_id},
-    )
+class SqlComparison:
+    """Table-2 and Table-3 against one target, computed in the database.
 
+    The table is checked once, when this is created, with the same rules as
+    `polars_solution.build_comparison_table`.
+    """
 
-def average_tier_difference(
-    connection: sa.Connection,
-    table: str,
-    target_id: str,
-    *,
-    exclude_equal: bool = False,
-) -> pd.DataFrame:
-    """Table-3, computed in the database. See the pandas version for the rules."""
-    _require_target(connection, table, target_id)
-    difference = f"NULLIF({_DIFFERENCE}, 0)" if exclude_equal else _DIFFERENCE
-    return pd.read_sql_query(
-        _comparison_query(table, _TABLE_3_SQL.format(difference=difference)),
-        connection,
-        params={"target_id": target_id},
-        dtype={"tier_difference": "float64"},
-    )
+    def __init__(self, connection: sa.Connection, table: str, target_id: str) -> None:
+        self.connection = connection
+        self.table = require_table(table)
+        self.target_id = target_id
+
+        check = _CHECK_SQL.format(
+            table=self.table, low=COVERED_TIERS.start, high=COVERED_TIERS.stop - 1
+        )
+        counts = connection.execute(sa.text(check), self._parameters).one()
+        check_counts(
+            duplicate_keys=counts.duplicate_keys,
+            nulls=counts.nulls,
+            outside_tiers=counts.outside_tiers,
+        )
+        if not counts.target_rows:
+            raise TargetNotFoundError(target_id)
+
+    @property
+    def _parameters(self) -> dict[str, str]:
+        return {"target_id": self.target_id}
+
+    def comparison_table(self) -> pl.DataFrame:
+        """Table-2."""
+        return pl.read_database(
+            _comparison_query(self.table, _TABLE_2_SQL),
+            self.connection,
+            execute_options={"parameters": self._parameters},
+            schema_overrides=polars_schema(TABLE_2_SCHEMA),
+        )
+
+    def average_tier_difference(self, *, exclude_equal: bool = False) -> pl.DataFrame:
+        """Table-3, for part B with `exclude_equal`."""
+        difference = f"NULLIF({_DIFFERENCE}, 0)" if exclude_equal else _DIFFERENCE
+        return pl.read_database(
+            _comparison_query(self.table, _TABLE_3_SQL.format(difference=difference)),
+            self.connection,
+            execute_options={"parameters": self._parameters},
+            schema_overrides=polars_schema(TABLE_3_SCHEMA),
+        )

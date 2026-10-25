@@ -132,49 +132,54 @@ The target formulary for this part of the exercise is now `formulary_id = '00022
 
 ## Solution
 
-The solution targets Python 3.15 and is managed with [uv](https://docs.astral.sh/uv/).
+The solution targets Python 3.15, uses [polars](https://pola.rs) for its DataFrames, and
+is managed with [uv](https://docs.astral.sh/uv/).
+
+> **Deviation from the challenge:** Part 1 asks for pandas `merge`/`join`. This solution
+> uses the equivalent polars joins instead, and Part 2 keeps the same rule: every join
+> happens in SQL.
 
 ```bash
 docker compose up --detach --wait   # Postgres with both tables loaded
 uv sync                             # Python 3.15 and the locked dependencies
 
-uv run formulary-tiers 1            # Part 1: pandas on test_formulary
+uv run formulary-tiers 1            # Part 1: polars on test_formulary
 uv run formulary-tiers 2            # Part 2: SQL on test_formulary
 uv run formulary-tiers 3            # Part 3: both on formulary, with timings
 uv run formulary-tiers 3 --target 00022000   # any other target formulary
 ```
 
-`db/01-init.sh` only runs when the container is first created, so after changing it
-run `docker compose down` before `docker compose up` again.
+`db/01-init.sh` only runs when the container is first created, so after changing it run
+`docker compose down --volumes` before `docker compose up` again.
 
 ### Layout
 
 | Module | Responsibility |
 | --- | --- |
-| `src/drug_formulary_tiers/pandas_solution.py` | Part 1: Table-2 and Table-3 as pure functions of a DataFrame |
-| `src/drug_formulary_tiers/sql_solution.py` | Part 2: the same tables computed in SQL and run through SQLAlchemy |
+| `src/drug_formulary_tiers/polars_solution.py` | Part 1: Table-2 and Table-3 as pure functions of a DataFrame |
+| `src/drug_formulary_tiers/sql_solution.py` | Part 2: `SqlComparison`, the same tables computed in SQL and run through SQLAlchemy |
 | `src/drug_formulary_tiers/db.py` | Connection settings (`DATABASE_URL` overrides them) and the Table-1 extract |
-| `src/drug_formulary_tiers/schema.py` | Table and column names, the uncovered tier (7), input validation |
+| `src/drug_formulary_tiers/schema.py` | Table schemas, the uncovered tier (7), input validation |
 | `src/drug_formulary_tiers/cli.py` | `formulary-tiers {1,2,3}`: runs a part and prints each table with timings |
 
 ### Approach
 
-Each formulary is compared with the target on the union of their drugs. Both
-solutions build Table-2 the same way:
+Each formulary is compared with the target on the union of their drugs. Both solutions
+build Table-2 the same way:
 
-1. Pair every formulary other than the target with every target drug (a cross join),
-   so the drugs a formulary lacks get a row.
+1. Pair every formulary other than the target with every target drug (a cross join), so
+   the drugs a formulary lacks get a row.
 2. Full outer join that with the formularies' own drugs on `(formulary_id, rxcui)`,
    which adds the drugs the target lacks.
 3. Give whichever side is missing tier 7.
 
 Table-3 averages `tier_level_value_target - tier_level_value` per formulary. For (B),
-equal tiers become null (`NULLIF` in SQL, `where` in pandas) so the average skips them.
-A formulary whose drugs all match the target keeps its row in (B) with a null average,
-so (A) and (B) always list the same formularies.
+equal tiers become null (`NULLIF` in SQL, `when/then` in polars) so the average skips
+them. A formulary whose drugs all match the target keeps its row in (B) with a null
+average, so (A) and (B) always list the same formularies.
 
-The work is linear in the size of Table-2 (1,659,527 rows for Part 3). The previous
-solution self-joined the whole table on `rxcui` alone, building a 514M-row
+The polars solution is linear in the size of Table-2 (1,659,527 rows for Part 3). The
+original solution self-joined the whole table on `rxcui` alone, building a 514M-row
 intermediate that took about 7 minutes.
 
 ### Results
@@ -188,43 +193,52 @@ For the README example, target `00019356`:
 | 00019300 | -1.0 | -1.5 |
 | 00019400 | 0.0 | 0.0 |
 
-Part 3, target `00022170`, compares 457 formularies. Timings from one run on an Apple
-silicon laptop against Postgres:
+Part 3, target `00022170`, compares 457 formularies. Three of them (`00022153`,
+`00022258`, `00022360`) match the target exactly, so their (B) average is null. Timings
+from one run on an Apple silicon laptop against a local Postgres:
 
-| Step | pandas | SQL |
+| Step | polars | SQL |
 | --- | --- | --- |
-| Load Table-1 (1,583,463 rows) | 1.0s | — |
-| Table-2 (1,659,527 rows) | 1.0s | 3.7s, mostly transferring the rows |
-| Table-3 (A) and (B) | 0.1s | 1.9s, two queries of about 0.9s each |
+| Check the table | included in Table-2 | 0.3s |
+| Load Table-1 (1,583,463 rows) | 0.9s | — |
+| Table-2 (1,659,527 rows) | 0.2s | 3.9s: about 1s joining, 1.7s sorting, 1s fetching |
+| Table-3 (A) and (B) | 0.04s | 2.0s: two queries of about 1s each |
 
 ### Edge cases and data quality
 
-- **Target not in the table:** both solutions raise `TargetNotFoundError`, and the CLI
-  exits with status 1.
-- **Formulary sharing no drugs with the target** (`00019400`): compared on both drug
-  sets, every drug uncovered on one side.
-- **Target as the only formulary:** empty Table-2 and Table-3.
-- **Duplicate `(formulary_id, rxcui)` keys or null values:** the pandas solution raises
-  `FormularyDataError`; the database rejects them with a primary key and `NOT NULL`.
+Both solutions run the same checks before comparing:
+
+- **Target not in the table:** `TargetNotFoundError`; the CLI exits with status 1.
+- **Duplicate `(formulary_id, rxcui)` keys, or null ids or tiers:** `FormularyDataError`.
+  The database also rejects them with a primary key and `NOT NULL`, but the SQL
+  solution checks anyway, since other databases may not.
+- **Wrong types:** the polars solution requires text ids and integer tiers, so `1.9`
+  isn't silently truncated and `"00019356"` doesn't become `19356`.
 - **Tiers outside 1-6:** the full dataset has 102 rows on tier 7 (formularies
   `00022158` and `00022161`). A covered drug on tier 7 cannot be told apart from an
-  uncovered one, so these rows are kept and a warning is logged.
-- **Identifiers:** `formulary_id` and `rxcui` stay text so leading zeros survive. Table
-  names are checked against an allowlist before going into SQL, and the target is
-  always a bind parameter.
+  uncovered one, so these rows are kept and both solutions log a warning.
+- **Formulary sharing no drugs with the target** (`00019400`): compared on both drug
+  sets, with every drug uncovered on one side.
+- **Target as the only formulary:** empty Table-2 and Table-3 with the usual columns.
+- **SQL safety:** table names are checked against an allowlist before going into SQL,
+  and the target is always a bind parameter.
+- **Row order:** Table-2 is sorted by `(formulary_id, rxcui)` in byte order. The SQL
+  solution gets that order from the `"C"` collation `db/01-init.sh` sets, so on a
+  database with another collation its rows can come back in a different order.
 
 ### Database
 
 `db/01-init.sh` and `docker-compose.yml`:
 
-- Primary key on `(formulary_id, rxcui)` and `NOT NULL` on the columns the comparison
-  uses, added after the bulk load, followed by `VACUUM ANALYZE`.
+- One transaction loads both tables and adds a primary key on `(formulary_id, rxcui)`
+  and `NOT NULL` on the columns the comparison uses. It is followed by `VACUUM ANALYZE`.
 - `formulary_id` and `rxcui` use the byte-order `"C"` collation, since they are codes
-  rather than prose. Sorting Table-2 dropped from 8.4s to 2.9s, and the order matches
-  pandas.
+  rather than prose. Sorting Table-2 dropped from 8.4s to 2.9s.
 - `appuser` owns the `formulary` database instead of being a superuser.
-- The image is pinned to `postgres:18`. The healthcheck connects over TCP, so
-  `docker compose up --wait` returns only after the data has loaded.
+- The image is pinned to `postgres:18`, and the port is only published on localhost.
+- The healthcheck queries the loaded data over TCP. `docker compose up --wait` returns
+  only once the load has committed, and a container restarted after a failed load stays
+  unhealthy instead of serving an empty database.
 
 ### Tests
 
@@ -237,15 +251,17 @@ uv run ruff format --check     # format
 
 - The README's Table-1, Table-2 and Table-3 are fixtures that both solutions must
   reproduce exactly.
-- Property-based tests (Hypothesis) compare both solutions on random formularies with
-  a brute-force reading of the rules in `tests/oracle.py`, which shares no code with
-  the package.
+- Property-based tests (Hypothesis) compare both solutions on random formularies with a
+  brute-force reading of the rules in `tests/oracle.py`, which shares no code with the
+  package. The generated data includes tier 7 and mixed-case and non-ASCII ids.
 - The SQL tests run on SQLite, and also on Postgres when `TEST_DATABASE_URL` is set.
-  With it set, `tests/test_postgres.py` also checks the data `db/01-init.sh` loads and
-  that both solutions agree with the reference on the full `formulary` table:
+  With it set, `tests/test_postgres.py` also checks the schema and data
+  `db/01-init.sh` creates, and checks both solutions on the full `formulary` table
+  against exact reference values and the brute-force reference:
   ```bash
   TEST_DATABASE_URL=postgresql+psycopg://appuser:appuser@localhost:5432/formulary uv run pytest
   ```
 
 CI runs all four checks on every pull request and push to `main`. The test job starts
-the database with `docker compose`, so the Postgres tests always run there.
+the database with `docker compose`, and the suite refuses to run in CI without
+`TEST_DATABASE_URL`, so the Postgres tests can't be skipped there unnoticed.

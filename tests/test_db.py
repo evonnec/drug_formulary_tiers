@@ -1,9 +1,9 @@
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pytest
 import sqlalchemy as sa
-from pandas.testing import assert_frame_equal
+from polars.testing import assert_frame_equal
 
 from drug_formulary_tiers.db import Settings, create_engine, load_formulary
 from drug_formulary_tiers.schema import require_table
@@ -31,7 +31,7 @@ def test_create_engine_prefers_explicit_url_then_environment(
 
 
 def test_load_formulary_returns_table_1(
-    connect: ConnectionFactory, readme_formulary: pd.DataFrame
+    connect: ConnectionFactory, readme_formulary: pl.DataFrame
 ) -> None:
     with connect(readme_formulary) as connection:
         loaded = load_formulary(connection, "test_formulary")
@@ -50,9 +50,11 @@ def test_require_table_accepts_the_formulary_tables() -> None:
     assert require_table("test_formulary") == "test_formulary"
 
 
-def test_test_data_file_is_the_readme_example(readme_formulary: pd.DataFrame) -> None:
-    data = pd.read_csv(
-        DATA / "test_formulary.txt", sep="|", dtype={"FORMULARY_ID": str, "RXCUI": str}
-    ).rename(columns=str.lower)
+def test_test_data_file_is_the_readme_example(readme_formulary: pl.DataFrame) -> None:
+    data = pl.read_csv(
+        DATA / "test_formulary.txt",
+        separator="|",
+        schema_overrides={"FORMULARY_ID": pl.String, "RXCUI": pl.String},
+    ).rename(str.lower)
 
-    assert_frame_equal(data[readme_formulary.columns], readme_formulary)
+    assert_frame_equal(data.select(readme_formulary.columns), readme_formulary)

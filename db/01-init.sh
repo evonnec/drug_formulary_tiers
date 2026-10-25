@@ -13,10 +13,14 @@ EOSQL
 # (formulary_id, rxcui) is the key the comparison assumes, so the database
 # enforces it. Both are codes rather than prose, so they use the byte-order "C"
 # collation: sorting on them is several times faster than with en_US, and the
-# order matches pandas. Keys are added after loading, which is faster than
+# order matches polars. Keys are added after loading, which is faster than
 # checking them row by row, and VACUUM ANALYZE gives the planner statistics.
+# The load is one transaction, so if any step fails no tables exist and the
+# healthcheck in docker-compose.yml keeps failing instead of passing on an
+# empty or half-loaded database.
 export PGPASSWORD=$APP_DB_PASS
 psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname "$APP_DB_NAME" <<-EOSQL
+  BEGIN;
   CREATE TABLE test_formulary(
     FORMULARY_ID TEXT COLLATE "C" NOT NULL,
     TIER_LEVEL_VALUE INT NOT NULL,
@@ -41,6 +45,8 @@ psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname "$APP_DB_NAME" <<-EOS
 
   ALTER TABLE test_formulary ADD PRIMARY KEY (FORMULARY_ID, RXCUI);
   ALTER TABLE formulary ADD PRIMARY KEY (FORMULARY_ID, RXCUI);
+  COMMIT;
+
   VACUUM ANALYZE test_formulary;
   VACUUM ANALYZE formulary;
 EOSQL
