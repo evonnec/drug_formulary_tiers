@@ -1,28 +1,34 @@
 """Both solutions agree with a brute-force reading of the README on random data."""
 
-import pandas as pd
+import logging
+import math
+
+import polars as pl
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from pandas.testing import assert_frame_equal
+from polars.testing import assert_frame_equal
 
-from drug_formulary_tiers import pandas_solution, sql_solution
+from drug_formulary_tiers import polars_solution
+from drug_formulary_tiers.sql_solution import SqlComparison
 from tests.helpers import ConnectionFactory, formulary_frame
 from tests.oracle import expected_tier_differences
 
-FORMULARY_IDS = [f"{n:08d}" for n in range(1, 7)]
-RXCUIS = [str(n) for n in range(1000, 1012)]
+# Mixed case, punctuation and non-ASCII ids check that both solutions sort the
+# same way; tier 7 also appears in the real data.
+FORMULARY_IDS = [*(f"{n:08d}" for n in range(1, 9)), "B", "_x", "a", "Ä"]
+RXCUIS = [*(str(n) for n in range(1000, 1012)), "999", "Rx", "é"]
 
 
 @st.composite
-def formularies(draw: st.DrawFn) -> tuple[pd.DataFrame, str]:
+def formularies(draw: st.DrawFn) -> tuple[pl.DataFrame, str]:
     """A Table-1 with unique (formulary_id, rxcui) keys, and a target in it."""
     drugs = draw(
         st.dictionaries(
             st.tuples(st.sampled_from(FORMULARY_IDS), st.sampled_from(RXCUIS)),
-            st.integers(min_value=1, max_value=6),
+            st.integers(min_value=1, max_value=7),
             min_size=1,
-            max_size=40,
+            max_size=60,
         )
     )
     rows = [
@@ -32,50 +38,56 @@ def formularies(draw: st.DrawFn) -> tuple[pd.DataFrame, str]:
     return formulary_frame(rows), target_id
 
 
-def averages(table_3: pd.DataFrame) -> dict[str, float]:
-    return dict(zip(table_3.formulary_id, table_3.tier_difference, strict=True))
+def averages(table_3: pl.DataFrame) -> dict[str, float]:
+    return {
+        formulary_id: math.nan if average is None else average
+        for formulary_id, average in table_3.iter_rows()
+    }
 
 
+@pytest.fixture(autouse=True)
+def quiet_tier_warnings(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.ERROR, logger="drug_formulary_tiers")
+
+
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(formularies())
-def test_pandas_matches_reference(case: tuple[pd.DataFrame, str]) -> None:
+def test_polars_matches_reference(case: tuple[pl.DataFrame, str]) -> None:
     formulary, target_id = case
     expected_all, expected_changed = expected_tier_differences(
-        formulary.itertuples(index=False, name=None), target_id
+        formulary.iter_rows(), target_id
     )
 
-    comparison = pandas_solution.build_comparison_table(formulary, target_id)
-    all_tiers = pandas_solution.average_tier_difference(comparison)
-    changed = pandas_solution.average_tier_difference(comparison, exclude_equal=True)
+    comparison = polars_solution.build_comparison_table(formulary, target_id)
+    all_tiers = polars_solution.average_tier_difference(comparison)
+    changed = polars_solution.average_tier_difference(comparison, exclude_equal=True)
 
-    assert averages(all_tiers) == pytest.approx(expected_all)
-    assert averages(changed) == pytest.approx(expected_changed, nan_ok=True)
+    assert averages(all_tiers) == pytest.approx(expected_all, rel=1e-12)
+    assert averages(changed) == pytest.approx(expected_changed, rel=1e-12, nan_ok=True)
 
 
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    max_examples=50,
+    deadline=None,  # each example opens its own database connection
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(formularies())
-def test_sql_matches_pandas_and_reference(
-    connect: ConnectionFactory, case: tuple[pd.DataFrame, str]
+def test_sql_matches_polars_and_reference(
+    connect: ConnectionFactory, case: tuple[pl.DataFrame, str]
 ) -> None:
     formulary, target_id = case
     expected_all, expected_changed = expected_tier_differences(
-        formulary.itertuples(index=False, name=None), target_id
+        formulary.iter_rows(), target_id
     )
 
     with connect(formulary) as connection:
-        comparison = sql_solution.build_comparison_table(
-            connection, "test_formulary", target_id
-        )
-        all_tiers = sql_solution.average_tier_difference(
-            connection, "test_formulary", target_id
-        )
-        changed = sql_solution.average_tier_difference(
-            connection, "test_formulary", target_id, exclude_equal=True
-        )
+        query = SqlComparison(connection, "test_formulary", target_id)
+        comparison = query.comparison_table()
+        all_tiers = query.average_tier_difference()
+        changed = query.average_tier_difference(exclude_equal=True)
 
     assert_frame_equal(
-        comparison,
-        pandas_solution.build_comparison_table(formulary, target_id),
-        check_dtype=False,  # an empty SQL result has no rows to infer types from
+        comparison, polars_solution.build_comparison_table(formulary, target_id)
     )
-    assert averages(all_tiers) == pytest.approx(expected_all)
-    assert averages(changed) == pytest.approx(expected_changed, nan_ok=True)
+    assert averages(all_tiers) == pytest.approx(expected_all, rel=1e-12)
+    assert averages(changed) == pytest.approx(expected_changed, rel=1e-12, nan_ok=True)

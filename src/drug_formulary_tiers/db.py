@@ -3,10 +3,10 @@
 import os
 from dataclasses import dataclass
 
-lazy import pandas as pd
+lazy import polars as pl
 lazy import sqlalchemy as sa
 
-from drug_formulary_tiers.schema import TABLE_1_COLUMNS, require_table
+from drug_formulary_tiers.schema import TABLE_1_SCHEMA, polars_schema, require_table
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -36,9 +36,11 @@ def create_engine(url: str | sa.URL | None = None) -> sa.Engine:
     return sa.create_engine(url or os.environ.get("DATABASE_URL") or Settings().url)
 
 
-def load_formulary(connection: sa.Connection, table: str) -> pd.DataFrame:
+def load_formulary(connection: sa.Connection, table: str) -> pl.DataFrame:
     """Table-1: the formulary_id, tier_level_value and rxcui of every row in `table`."""
     query = sa.select(
-        sa.table(require_table(table), *(sa.column(c) for c in TABLE_1_COLUMNS))
+        sa.table(require_table(table), *(sa.column(c) for c in TABLE_1_SCHEMA))
     )
-    return pd.read_sql_query(query, connection)
+    return pl.read_database(
+        query, connection, schema_overrides=polars_schema(TABLE_1_SCHEMA)
+    )
