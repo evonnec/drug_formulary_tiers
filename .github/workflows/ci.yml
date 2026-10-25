@@ -17,14 +17,26 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://appuser:appuser@localhost:5432/formulary
     steps:
       - uses: actions/checkout@v7
+      # Started first so db/01-init.sh loads the data while uv installs.
+      - name: Start the formulary database
+        run: docker compose up --detach
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           enable-cache: true
           cache-python: true
       - run: uv sync --locked
+      - name: Wait for the database to finish loading
+        run: docker compose up --detach --wait --wait-timeout 180
       - run: uv run pytest
+      - name: Run Part 3 for its timings
+        run: uv run formulary-tiers 3
+      - name: Show database logs
+        if: failure()
+        run: docker compose logs postgres
 
   lint:
     runs-on: ubuntu-latest
