@@ -33,13 +33,13 @@ To simplify the analysis, for each pair of formularies compared, if one formular
 ### Requirements
 
 **Notes:**
-The challenge calls for solving the problem by transforming the data in two distinct ways: using pandas (Part 1) and using SQL (Part 2). You may start with whichever approach
+The challenge calls for solving the problem by transforming the data in two distinct ways: using polars (Part 1) and using SQL (Part 2). You may start with whichever approach
 is easiest for you.  After you've implemented the solution with one approach, you should then attempt to reimplement the solution using the other
 approach as well. In either case, you should execute the query within the python interpreter using sqlalchemy.
 
 For Part 1:
-The code must be written in Python 3.9, and the solution:
-- must be implemented using a `pandas` DataFrame to perform the calculations.
+The code must be written in Python 3.15 or later, and the solution:
+- must be implemented using a `polars` DataFrame to perform the calculations.
 - the DataFrame should contain a single calculated average tier difference value for each `formulary_id` compared against the target formulary.
 - should be implemented using functions with well-defined interfaces.
 
@@ -73,7 +73,7 @@ formulary\_id | tier\_level\_value | rxcui
 00019400 | 3 | 1006
 
 
-Next, create a new DataFrame illustrated in Table-2 below by performing one or more self-joins on the previously created DataFrame, applying any filtering as needed. The self-join(s) must be implemented using the `pandas` library, and, in particular, using either the `merge` or `join` functions.
+Next, create a new DataFrame illustrated in Table-2 below by performing one or more self-joins on the previously created DataFrame, applying any filtering as needed. The self-join(s) must be implemented using the `polars` library, and, in particular, using its `join` function.
 
 __Table-2__
 
@@ -121,7 +121,7 @@ formulary\_id | tier\_difference
 Once you are confident you have correctly implemented the logic to produce the DataFrames illustrated in Table-2 and Table-3 above, proceed to part 2.
 
 ### Part 2
-Re-implement the logic used to produce Table-2 & Table-3 from Part 1 above. However, this time you may not use the the `pandas` `merge` or `join` functions.  Instead, you must use SQL to perform any join logic or reshaping of the data.
+Re-implement the logic used to produce Table-2 & Table-3 from Part 1 above. However, this time you may not use the `polars` `join` function.  Instead, you must use SQL to perform any join logic or reshaping of the data.
 
 ### Part 3
 
@@ -134,10 +134,6 @@ The target formulary for this part of the exercise is now `formulary_id = '00022
 
 The solution targets Python 3.15, uses [polars](https://pola.rs) for its DataFrames, and
 is managed with [uv](https://docs.astral.sh/uv/).
-
-> **Deviation from the challenge:** Part 1 asks for pandas `merge`/`join`. This solution
-> uses the equivalent polars joins instead, and Part 2 keeps the same rule: every join
-> happens in SQL.
 
 ```bash
 docker compose up --detach --wait   # Postgres with both tables loaded
