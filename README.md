@@ -143,3 +143,13 @@ uv run python src/solution.py
 # Part 3: compare against a target formulary in `formulary`
 uv run python src/solution.py 00022170
 ```
+
+### Checks
+
+CI runs these on every pull request and push to `main`:
+```bash
+uv run pytest                  # test
+uv run ruff check              # lint
+uv run mypy                    # type check
+uv run ruff format --check     # format
+```
