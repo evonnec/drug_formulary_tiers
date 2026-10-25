@@ -129,3 +129,17 @@ There is an additional, more comprehensive formulary dataset contained in the `f
 The target formulary for this part of the exercise is now `formulary_id = '00022170'`.  For each of the exercises below, print out the amount of time it takes for the code to execute.
 * (A) Reuse your previously implemented logic to produce the same calculations for the average tier differences as described in parts (A) and (B) from Part 1 on the `formulary` table.
 * (B) Reuse your previously implemented logic to produce the same calculations for the average tier differences as described in parts (A) and (B) from Part 2 on the `formulary` table.
+
+## Running the solution
+
+The solution targets Python 3.15 and is managed with [uv](https://docs.astral.sh/uv/):
+```bash
+# Install Python 3.15 and the locked dependencies into .venv
+uv sync
+
+# Part 1: compare formularies in `test_formulary`
+uv run python src/solution.py
+
+# Part 3: compare against a target formulary in `formulary`
+uv run python src/solution.py 00022170
+```
