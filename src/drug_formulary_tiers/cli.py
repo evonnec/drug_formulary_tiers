@@ -29,13 +29,16 @@ class Part:
     table: FormularyTable
     target_id: str
     methods: tuple[Method, ...]
+    # Part 3 asks only for the averages, which the SQL solution computes without
+    # Table-2, so fetching its 1.66M rows there would mostly time the transfer.
+    sql_table_2: bool = True
 
 
 PARTS = frozendict(
     {
         1: Part("test_formulary", "00019356", ("polars",)),
         2: Part("test_formulary", "00019356", ("sql",)),
-        3: Part("formulary", "00022170", ("polars", "sql")),
+        3: Part("formulary", "00022170", ("polars", "sql"), sql_table_2=False),
     }
 )
 
@@ -59,10 +62,10 @@ class Timings:
         return f"Execution time: {sum(self.steps.values()):.2f}s ({steps})"
 
 
-def run_polars(connection: sa.Connection, table: str, target_id: str) -> None:
+def run_polars(connection: sa.Connection, part: Part, target_id: str) -> None:
     timings = Timings()
     with timings.step("load Table-1"):
-        formulary = load_formulary(connection, table)
+        formulary = load_formulary(connection, part.table)
     print(f"Table-1:\n{formulary}\n")
 
     with timings.step("Table-2"):
@@ -78,14 +81,15 @@ def run_polars(connection: sa.Connection, table: str, target_id: str) -> None:
     print(timings)
 
 
-def run_sql(connection: sa.Connection, table: str, target_id: str) -> None:
+def run_sql(connection: sa.Connection, part: Part, target_id: str) -> None:
     timings = Timings()
     with timings.step("check"):
-        query = sql_solution.SqlComparison(connection, table, target_id)
+        query = sql_solution.SqlComparison(connection, part.table, target_id)
 
-    with timings.step("Table-2"):
-        comparison = query.comparison_table()
-    print(f"Table-2:\n{comparison}\n")
+    if part.sql_table_2:
+        with timings.step("Table-2"):
+            comparison = query.comparison_table()
+        print(f"Table-2:\n{comparison}\n")
 
     with timings.step("Table-3"):
         all_tiers, changed_tiers = query.average_tier_differences()
@@ -93,7 +97,7 @@ def run_sql(connection: sa.Connection, table: str, target_id: str) -> None:
     print(timings)
 
 
-METHODS: frozendict[Method, Callable[[sa.Connection, str, str], None]] = frozendict(
+METHODS: frozendict[Method, Callable[[sa.Connection, Part, str], None]] = frozendict(
     {"polars": run_polars, "sql": run_sql}
 )
 
@@ -147,7 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     f"== Part {args.part} with {method}: {part.table}, target {target_id}\n"
                 )
-                METHODS[method](connection, part.table, target_id)
+                METHODS[method](connection, part, target_id)
     except TargetNotFoundError as error:
         return fail(f"{error} in {part.table}")
     except FormularyDataError as error:
