@@ -122,7 +122,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--database-url",
-        help="SQLAlchemy URL (default: $DATABASE_URL, else the docker compose database)",
+        help="SQLAlchemy URL (default: $DATABASE_URL, set in .env.example)",
     )
     return parser.parse_args(argv)
 

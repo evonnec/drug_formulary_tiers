@@ -12,12 +12,13 @@ services:
       timeout: 10s
       retries: 5
     restart: always
+    # Credentials come from .env, which git ignores: cp .env.example .env
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - APP_DB_USER=appuser
-      - APP_DB_PASS=appuser
-      - APP_DB_NAME=formulary
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?copy .env.example to .env}
+      - APP_DB_USER=${APP_DB_USER:?copy .env.example to .env}
+      - APP_DB_PASS=${APP_DB_PASS:?copy .env.example to .env}
+      - APP_DB_NAME=${APP_DB_NAME:?copy .env.example to .env}
     volumes:
       - ./db:/docker-entrypoint-initdb.d/:ro
       - ./data:/data:ro

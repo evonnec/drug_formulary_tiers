@@ -18,10 +18,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      TEST_DATABASE_URL: postgresql+psycopg://appuser:appuser@localhost:5432/formulary
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The local development settings, for docker compose and for later steps,
+      # which get DATABASE_URL and TEST_DATABASE_URL from them.
+      - name: Use the example settings
+        run: |
+          cp .env.example .env
+          grep -v -e '^#' -e '^$' .env >> "$GITHUB_ENV"
       # Started first so db/01-init.sh loads the data while uv installs.
       - name: Start the formulary database
         run: docker compose up --detach

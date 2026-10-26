@@ -1,7 +1,7 @@
 """Checks against the docker compose database as db/01-init.sh loads it.
 
-Run with `docker compose up -d --wait` and
-TEST_DATABASE_URL=postgresql+psycopg://appuser:appuser@localhost:5432/formulary
+Run with `docker compose up -d --wait` and `uv run --env-file .env pytest`, which
+sets TEST_DATABASE_URL from .env (copied from .env.example).
 """
 
 from collections.abc import Iterator

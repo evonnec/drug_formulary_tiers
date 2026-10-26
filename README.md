@@ -140,14 +140,18 @@ The solution targets Python 3.15, uses [polars](https://pola.rs) for its DataFra
 is managed with [uv](https://docs.astral.sh/uv/).
 
 ```bash
+cp .env.example .env                # local database settings; git ignores .env
 docker compose up --detach --wait   # Postgres with both tables loaded
 uv sync                             # Python 3.15 and the locked dependencies
 
-uv run formulary-tiers 1            # Part 1: polars on test_formulary
-uv run formulary-tiers 2            # Part 2: SQL on test_formulary
-uv run formulary-tiers 3            # Part 3: both on formulary, with timings
-uv run formulary-tiers 3 --target 00022000   # any other target formulary
+uv run --env-file .env formulary-tiers 1   # Part 1: polars on test_formulary
+uv run --env-file .env formulary-tiers 2   # Part 2: SQL on test_formulary
+uv run --env-file .env formulary-tiers 3   # Part 3: both on formulary, with timings
+uv run --env-file .env formulary-tiers 3 --target 00022000   # another target
 ```
+
+No database credentials live in the code: docker compose takes them from `.env`, and
+the CLI connects to `--database-url` or `DATABASE_URL`, which `--env-file .env` sets.
 
 `db/01-init.sh` only runs when the container is first created, so after changing it run
 `docker compose down --volumes` before `docker compose up` again.
@@ -158,7 +162,7 @@ uv run formulary-tiers 3 --target 00022000   # any other target formulary
 | --- | --- |
 | `src/drug_formulary_tiers/polars_solution.py` | Part 1: Table-2 and Table-3 as pure functions of a DataFrame |
 | `src/drug_formulary_tiers/sql_solution.py` | Part 2: `SqlComparison`, the same tables computed in SQL and run through SQLAlchemy |
-| `src/drug_formulary_tiers/db.py` | Connection settings (`DATABASE_URL` overrides them) and the Table-1 extract |
+| `src/drug_formulary_tiers/db.py` | The connection (`--database-url` or `DATABASE_URL`) and the Table-1 extract |
 | `src/drug_formulary_tiers/schema.py` | Table schemas, the uncovered tier (7), input validation |
 | `src/drug_formulary_tiers/cli.py` | `formulary-tiers {1,2,3}`: runs a part and prints each table with timings |
 
@@ -273,8 +277,9 @@ uv run ruff format --check     # format
   With it set, `tests/test_postgres.py` also checks the schema and data
   `db/01-init.sh` creates, and checks both solutions on the full `formulary` table
   against exact reference values and the brute-force reference:
+  `.env.example` sets it, so with the database up:
   ```bash
-  TEST_DATABASE_URL=postgresql+psycopg://appuser:appuser@localhost:5432/formulary uv run pytest
+  uv run --env-file .env pytest
   ```
 
 CI runs all four checks on every pull request and push to `main`. The test job starts
