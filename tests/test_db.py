@@ -39,7 +39,7 @@ def test_load_formulary_returns_table_1(
     assert_frame_equal(loaded, readme_formulary)
 
 
-def test_load_formulary_keeps_values_csv_could_mangle(
+def test_load_formulary_round_trips_awkward_values(
     connect: ConnectionFactory,
 ) -> None:
     formulary = formulary_frame(

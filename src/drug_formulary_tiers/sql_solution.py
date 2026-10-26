@@ -199,11 +199,11 @@ class SqlComparison:
 
     def average_tier_differences(self) -> tuple[pl.DataFrame, pl.DataFrame]:
         """Table-3 for parts A and B, from a single query."""
-        averages = pl.read_database(
-            sa.text(_TABLE_3_SQL.format(table=self.table, uncovered=UNCOVERED_TIER)),
+        averages = read_frame(
             self.connection,
-            execute_options={"parameters": self._parameters},
-            schema_overrides=polars_schema(_AVERAGES_SCHEMA),
+            sa.text(_TABLE_3_SQL.format(table=self.table, uncovered=UNCOVERED_TIER)),
+            _AVERAGES_SCHEMA,
+            self._parameters,
         )
         all_tiers, changed_tiers = (
             averages.select("formulary_id", tier_difference=column).cast(

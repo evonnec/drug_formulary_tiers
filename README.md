@@ -184,9 +184,9 @@ formulary whose drugs all match the target keeps its row in (B) with a null aver
 Both are linear in the size of the data. The original solution self-joined the whole
 table on `rxcui` alone, building a 514M-row intermediate that took about 7 minutes.
 
-On Postgres, both solutions read their rows over `COPY ... TO STDOUT` as CSV, which
-polars parses directly. That uses about a fifth of the memory of building a Python
-object per value. Other databases, such as SQLite in the tests, fetch rows the usual way.
+Every query runs through SQLAlchemy, as the challenge asks. Rows are fetched in batches
+of 50,000, and polars converts each batch before the next is fetched. That keeps peak
+memory to a fraction of fetching all 1.6M rows as Python objects at once.
 
 ### Results
 
@@ -207,10 +207,10 @@ are medians of three runs on an Apple silicon laptop against a local Postgres:
 | --- | --- | --- |
 | Check the table | included in Table-2 | 0.06s |
 | Load Table-1 (1,583,463 rows) | 1.0s | — |
-| Table-2 (1,659,527 rows) | 0.3s | 1.9s, mostly the full join and transfer |
+| Table-2 (1,659,527 rows) | 0.3s | 2.6s, mostly the full join and transfer |
 | Table-3 (A) and (B) | 0.04s | 0.2s, one query |
 
-Peak memory for the whole `formulary-tiers 3` run is about 0.9 GB.
+Peak memory for the whole `formulary-tiers 3` run is about 1 GB.
 
 ### Edge cases and data quality
 
