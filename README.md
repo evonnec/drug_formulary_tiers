@@ -41,6 +41,12 @@ The challenge calls for solving the problem by transforming the data in two dist
 is easiest for you.  After you've implemented the solution with one approach, you should then attempt to reimplement the solution using the other
 approach as well. In either case, you should execute the query within the python interpreter using sqlalchemy.
 
+> **Note:** executing every query through SQLAlchemy was the requirement when this
+> challenge was written, years ago. The solution still connects and builds its queries
+> with SQLAlchemy, but on Postgres it reads large results over `COPY` on that
+> connection, because executing them through SQLAlchemy is slower: 2.6s against 1.8s
+> to fetch Table-2's 1.66M rows, with about 100 MB more memory.
+
 For Part 1:
 The code must be written in Python 3.15 or later, and the solution:
 - must be implemented using a `polars` DataFrame to perform the calculations.
@@ -190,7 +196,9 @@ table on `rxcui` alone, building a 514M-row intermediate that took about 7 minut
 
 On Postgres, both solutions read their rows over `COPY ... TO STDOUT` as CSV, which
 polars parses directly. That uses about a fifth of the memory of building a Python
-object per value. Other databases, such as SQLite in the tests, fetch rows the usual way.
+object per value, and it is faster than executing the query through SQLAlchemy (see
+the note under Requirements). Other databases, such as SQLite in the tests, fetch rows
+the usual way.
 
 ### Results
 
