@@ -128,6 +128,15 @@ def test_unusable_database_url_exits_with_an_error(
     assert "secret" not in err
 
 
+def test_missing_database_url_exits_with_an_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert main(["1"]) == 1
+    assert "cannot use the database URL: none given" in capsys.readouterr().err
+
+
 def test_database_url_defaults_to_the_environment(
     database_url: str,
     monkeypatch: pytest.MonkeyPatch,

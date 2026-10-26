@@ -14,8 +14,7 @@ from drug_formulary_tiers.schema import (
     polars_schema,
 )
 
-# The docker compose database, e.g.
-# postgresql+psycopg://appuser:appuser@localhost:5432/formulary
+# The docker compose database; .env.example sets it.
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 requires_postgres = pytest.mark.skipif(
     not TEST_DATABASE_URL, reason="set TEST_DATABASE_URL to run against Postgres"

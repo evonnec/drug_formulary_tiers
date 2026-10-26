@@ -5,17 +5,11 @@ import pytest
 import sqlalchemy as sa
 from polars.testing import assert_frame_equal
 
-from drug_formulary_tiers.db import Settings, create_engine, load_formulary
+from drug_formulary_tiers.db import create_engine, load_formulary
 from drug_formulary_tiers.schema import require_table
 from tests.helpers import ConnectionFactory, formulary_frame
 
 DATA = Path(__file__).parents[1] / "data"
-
-
-def test_settings_default_to_the_docker_compose_database() -> None:
-    assert Settings().url.render_as_string(hide_password=False) == (
-        "postgresql+psycopg://appuser:appuser@localhost:5432/formulary"
-    )
 
 
 def test_create_engine_prefers_explicit_url_then_environment(
@@ -27,7 +21,8 @@ def test_create_engine_prefers_explicit_url_then_environment(
     assert create_engine().url.database == "from-env.db"
 
     monkeypatch.delenv("DATABASE_URL")
-    assert create_engine().url == Settings().url
+    with pytest.raises(sa.exc.ArgumentError, match="set DATABASE_URL"):
+        create_engine()
 
 
 def test_load_formulary_returns_table_1(
