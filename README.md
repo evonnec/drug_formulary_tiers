@@ -219,10 +219,12 @@ are medians of three runs on an Apple silicon laptop against a local Postgres:
 | --- | --- | --- |
 | Check the table | included in Table-2 | 0.06s |
 | Load Table-1 (1,583,463 rows) | 1.0s | — |
-| Table-2 (1,659,527 rows) | 0.3s | 1.9s, mostly the full join and transfer |
+| Table-2 (1,659,527 rows) | 0.3s | not fetched: Part 3 needs only Table-3 |
 | Table-3 (A) and (B) | 0.04s | 0.2s, one query |
 
-Peak memory for the whole `formulary-tiers 3` run is about 0.9 GB.
+The SQL solution computes Table-3 without Table-2, so Part 3 skips fetching Table-2's
+rows; `formulary-tiers 2` prints SQL Table-2 for the README example. Peak memory for the
+whole `formulary-tiers 3` run is about 0.8 GB.
 
 ### Edge cases and data quality
 

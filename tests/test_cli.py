@@ -68,6 +68,10 @@ def test_part_3_runs_both_methods_on_formulary(
     assert "== Part 3 with polars: formulary" in out
     assert "== Part 3 with sql: formulary" in out
     assert out.count("Execution time:") == 2
+    # Part 3 needs only the averages, so SQL skips fetching Table-2
+    polars_out, sql_out = out.split("== Part 3 with sql", 1)
+    assert "Table-2:" in polars_out
+    assert "Table-2" not in sql_out
     for heading in ("Table-3 (A)", "Table-3 (B)"):
         assert out.count(heading) == 2
         assert EXTRA_FORMULARY in table_3_values(out, heading)
