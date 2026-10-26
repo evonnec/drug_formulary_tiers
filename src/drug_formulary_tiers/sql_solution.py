@@ -157,7 +157,8 @@ class SqlComparison:
     """Table-2 and Table-3 against one target, computed in the database.
 
     The table is checked once, when this is created, with the same rules as
-    `polars_solution.build_comparison_table`.
+    `polars_solution.build_comparison_table`. Give it a `db.snapshot()`
+    connection so the check and every later query read the same data.
     """
 
     def __init__(self, connection: sa.Connection, table: str, target_id: str) -> None:

@@ -2,7 +2,8 @@
 
 import io
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any, cast
 
 lazy import polars as pl
@@ -20,6 +21,22 @@ def create_engine(url: str | sa.URL | None = None) -> sa.Engine:
             "none given; pass --database-url or set DATABASE_URL (see .env.example)"
         )
     return sa.create_engine(url)
+
+
+@contextmanager
+def snapshot(engine: sa.Engine) -> Iterator[sa.Connection]:
+    """A connection whose queries all read the same snapshot of the data.
+
+    On Postgres that is one REPEATABLE READ, READ ONLY transaction, so the SQL
+    check, Table-2 and Table-3 can't disagree if a table changes mid-run. The
+    transaction starts at the first query and is rolled back on exit.
+    """
+    with engine.connect() as connection:
+        if connection.dialect.name == "postgresql":
+            connection.execution_options(
+                isolation_level="REPEATABLE READ", postgresql_readonly=True
+            )
+        yield connection
 
 
 def read_frame(

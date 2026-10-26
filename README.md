@@ -248,6 +248,9 @@ Both solutions run the same checks before comparing:
 - **Target as the only formulary:** empty Table-2 and Table-3 with the usual columns.
 - **SQL safety:** table names are checked against an allowlist before going into SQL,
   and the target is always a bind parameter.
+- **Consistent reads:** each run reads one snapshot of the data, a `REPEATABLE READ,
+  READ ONLY` transaction on Postgres. The SQL check, Table-2 and Table-3, and in Part 3
+  both solutions, see the same rows even if a table is reloaded mid-run.
 - **Row order:** both solutions sort Table-2 by `(formulary_id, rxcui)` in byte order
   with polars, whatever the database's collation. Sorting 1.7M rows took Postgres longer
   than joining them.
