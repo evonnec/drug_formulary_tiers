@@ -140,7 +140,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     pl.Config.set_tbl_cols(-1)
     pl.Config.set_tbl_width_chars(120)
 
-    engine = create_engine(args.database_url)
+    try:
+        engine = create_engine(args.database_url)
+    except (sa.exc.ArgumentError, ImportError) as error:
+        # A URL SQLAlchemy can't parse, or whose driver isn't installed. The URL
+        # itself isn't echoed, since it may hold a password.
+        return fail(f"cannot use the database URL: {error}")
     try:
         with engine.connect() as connection:
             for method in part.methods:
