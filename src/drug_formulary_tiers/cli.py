@@ -14,7 +14,7 @@ lazy import polars as pl
 lazy import sqlalchemy as sa
 
 from drug_formulary_tiers import polars_solution, sql_solution
-from drug_formulary_tiers.db import create_engine, load_formulary
+from drug_formulary_tiers.db import create_engine, load_formulary, snapshot
 from drug_formulary_tiers.schema import (
     FormularyDataError,
     FormularyTable,
@@ -151,7 +151,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         # itself isn't echoed, since it may hold a password.
         return fail(f"cannot use the database URL: {error}")
     try:
-        with engine.connect() as connection:
+        # One snapshot for the whole part, so in Part 3 both methods read the
+        # same data, and each method's steps agree with one another.
+        with snapshot(engine) as connection:
             for method in part.methods:
                 print(
                     f"== Part {args.part} with {method}: {part.table}, target {target_id}\n"

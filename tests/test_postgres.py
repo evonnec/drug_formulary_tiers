@@ -4,6 +4,7 @@ Run with `docker compose up -d --wait` and `uv run --env-file .env pytest`, whic
 sets TEST_DATABASE_URL from .env (copied from .env.example).
 """
 
+import uuid
 from collections.abc import Iterator
 from fractions import Fraction
 
@@ -13,7 +14,7 @@ import sqlalchemy as sa
 from polars.testing import assert_frame_equal
 
 from drug_formulary_tiers import polars_solution
-from drug_formulary_tiers.db import load_formulary
+from drug_formulary_tiers.db import load_formulary, snapshot
 from drug_formulary_tiers.sql_solution import SqlComparison, _has_unique_key
 from tests.helpers import TEST_DATABASE_URL, requires_postgres
 from tests.oracle import expected_tier_differences
@@ -56,6 +57,52 @@ def full_comparison(full_formulary: pl.DataFrame) -> pl.DataFrame:
 @pytest.fixture(scope="module")
 def full_sql(connection: sa.Connection) -> SqlComparison:
     return SqlComparison(connection, "formulary", FULL_TARGET)
+
+
+@pytest.fixture
+def engine() -> Iterator[sa.Engine]:
+    engine = sa.create_engine(TEST_DATABASE_URL or "")
+    yield engine
+    engine.dispose()
+
+
+def test_snapshot_is_a_read_only_repeatable_read_transaction(
+    engine: sa.Engine,
+) -> None:
+    with snapshot(engine) as connection:
+        isolation, read_only = connection.execute(
+            sa.text(
+                "SELECT current_setting('transaction_isolation'),"
+                " current_setting('transaction_read_only')"
+            )
+        ).one()
+        with pytest.raises(sa.exc.DBAPIError, match="read-only transaction"):
+            connection.execute(sa.text("CREATE TEMPORARY TABLE scratch (n int)"))
+
+    assert (isolation, read_only) == ("repeatable read", "on")
+
+
+def test_snapshot_does_not_see_rows_committed_after_it_starts(
+    engine: sa.Engine,
+) -> None:
+    table = f"snapshot_probe_{uuid.uuid4().hex[:8]}"
+    count = sa.text(f"SELECT count(*) FROM {table}")
+    with engine.begin() as setup:
+        setup.execute(sa.text(f"CREATE TABLE {table} (n int)"))
+        setup.execute(sa.text(f"INSERT INTO {table} VALUES (1)"))
+    try:
+        with snapshot(engine) as reader:
+            before = reader.execute(count).scalar_one()
+            with engine.begin() as writer:
+                writer.execute(sa.text(f"INSERT INTO {table} VALUES (2)"))
+            after = reader.execute(count).scalar_one()
+        with engine.connect() as fresh:
+            committed = fresh.execute(count).scalar_one()
+    finally:
+        with engine.begin() as cleanup:
+            cleanup.execute(sa.text(f"DROP TABLE {table}"))
+
+    assert (before, after, committed) == (1, 1, 2)
 
 
 def test_test_formulary_is_the_readme_example(
