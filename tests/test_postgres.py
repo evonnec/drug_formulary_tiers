@@ -85,6 +85,18 @@ def test_key_is_enforced(connection: sa.Connection, table: str) -> None:
     connection.rollback()
 
 
+def test_formulary_holds_one_edition_per_formulary(connection: sa.Connection) -> None:
+    editions = connection.execute(
+        sa.text(
+            "SELECT max(editions) FROM ("
+            " SELECT count(DISTINCT (contract_year, formulary_version)) AS editions"
+            " FROM formulary GROUP BY formulary_id) AS per_formulary"
+        )
+    ).scalar_one()
+
+    assert editions == 1
+
+
 def test_primary_key_lets_the_check_skip_counting_duplicates(
     connection: sa.Connection,
 ) -> None:

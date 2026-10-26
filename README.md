@@ -244,6 +244,10 @@ Both solutions run the same checks before comparing:
 
 - One transaction loads both tables and adds a primary key on `(formulary_id, rxcui)`
   and `NOT NULL` on the columns the comparison uses. It is followed by `VACUUM ANALYZE`.
+- An extract can hold several editions of a formulary (a contract year and version).
+  Only each formulary's latest edition is loaded, by contract year and then version, so
+  plans aren't mixed and the primary key holds. The data here has one edition per
+  formulary, so all 1,583,463 rows load.
 - `formulary_id` and `rxcui` use the byte-order `"C"` collation, since they are codes
   rather than prose. Comparing them, and building and scanning the primary key, is
   cheaper than under `en_US`.

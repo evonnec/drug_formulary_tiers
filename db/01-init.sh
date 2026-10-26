@@ -28,8 +28,8 @@ psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname "$APP_DB_NAME" <<-EOS
   );
   CREATE TABLE formulary(
     FORMULARY_ID TEXT COLLATE "C" NOT NULL,
-    FORMULARY_VERSION TEXT,
-    CONTRACT_YEAR TEXT,
+    FORMULARY_VERSION TEXT NOT NULL,
+    CONTRACT_YEAR TEXT NOT NULL,
     RXCUI TEXT COLLATE "C" NOT NULL,
     NDC TEXT,
     TIER_LEVEL_VALUE INT NOT NULL,
@@ -41,7 +41,23 @@ psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname "$APP_DB_NAME" <<-EOS
   );
 
   \copy test_formulary FROM '$DATA_DIR/test_formulary.txt' DELIMITER '|' CSV HEADER
-  \copy formulary FROM PROGRAM 'tar -xzOf $DATA_DIR/full_formulary.tar.gz full_formulary.txt' DELIMITER '|' CSV HEADER
+  -- An extract can hold several editions of a formulary (a contract year and
+  -- version); comparing them together would mix plans, and the primary key
+  -- would reject the load. Keep each formulary's latest edition.
+  CREATE TEMPORARY TABLE formulary_load (LIKE formulary) ON COMMIT DROP;
+  \copy formulary_load FROM PROGRAM 'tar -xzOf $DATA_DIR/full_formulary.tar.gz full_formulary.txt' DELIMITER '|' CSV HEADER
+  INSERT INTO formulary
+  SELECT FORMULARY_ID, FORMULARY_VERSION, CONTRACT_YEAR, RXCUI, NDC, TIER_LEVEL_VALUE,
+    QUANTITY_LIMIT_YN, QUANTITY_LIMIT_AMOUNT, QUANTITY_LIMIT_DAYS,
+    PRIOR_AUTHORIZATION_YN, STEP_THERAPY_YN
+  FROM (
+    SELECT *, rank() OVER (
+      PARTITION BY FORMULARY_ID
+      ORDER BY CONTRACT_YEAR::int DESC, FORMULARY_VERSION::int DESC
+    ) AS edition
+    FROM formulary_load
+  ) AS ranked
+  WHERE edition = 1;
 
   ALTER TABLE test_formulary ADD PRIMARY KEY (FORMULARY_ID, RXCUI);
   ALTER TABLE formulary ADD PRIMARY KEY (FORMULARY_ID, RXCUI);
