@@ -103,6 +103,27 @@ def test_unreachable_database_exits_with_an_error(
     assert "Traceback" not in err
 
 
+@pytest.mark.parametrize(
+    ("url", "reason"),
+    [
+        ("not a url", "Could not parse"),
+        ("nosuchdialect://user:secret@localhost/db", "Can't load plugin"),
+        ("mysql://user:secret@localhost/db", "No module named"),
+    ],
+    ids=["unparseable", "unknown dialect", "driver not installed"],
+)
+def test_unusable_database_url_exits_with_an_error(
+    capsys: pytest.CaptureFixture[str], url: str, reason: str
+) -> None:
+    assert main(["1", "--database-url", url]) == 1
+
+    err = capsys.readouterr().err
+    assert err.startswith("formulary-tiers: error: cannot use the database URL:")
+    assert reason in err
+    assert "Traceback" not in err
+    assert "secret" not in err
+
+
 def test_database_url_defaults_to_the_environment(
     database_url: str,
     monkeypatch: pytest.MonkeyPatch,
